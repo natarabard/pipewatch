@@ -1,0 +1,26 @@
+# pipewatch default configuration
+
+log_level: INFO
+metrics_retention_days: 7
+
+sources:
+  - name: main_postgres
+    type: postgres
+    connection_string: postgresql://user:password@localhost:5432/mydb
+    interval_seconds: 60
+    tags:
+      - production
+      - critical
+
+  - name: etl_s3_bucket
+    type: s3
+    connection_string: s3://my-data-bucket/pipeline/output/
+    interval_seconds: 300
+    tags:
+      - etl
+
+alert:
+  channel: webhook
+  threshold_failures: 3
+  cooldown_seconds: 300
+  webhook_url: https://hooks.example.com/pipewatch-alerts
