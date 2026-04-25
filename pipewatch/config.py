@@ -1,73 +1,79 @@
 """Configuration loading and validation for pipewatch."""
 
-import os
-from dataclasses import dataclass, field
-from typing import List, Optional
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
 
 import yaml
+from pydantic import BaseModel, Field, field_validator
 
 
-@dataclass
-class SourceConfig:
+class SourceConfig(BaseModel):
+    """Configuration for a single metrics source endpoint."""
+
     name: str
-    type: str
-    connection_string: str
+    url: str
+    headers: dict[str, str] | None = None
     interval_seconds: int = 60
-    tags: List[str] = field(default_factory=list)
+
+    @field_validator("url")
+    @classmethod
+    def url_must_have_scheme(cls, v: str) -> str:
+        if not v.startswith(("http://", "https://")):
+            raise ValueError("url must start with http:// or https://")
+        return v
 
 
-@dataclass
-class AlertConfig:
-    channel: str
-    threshold_failures: int = 3
-    cooldown_seconds: int = 300
-    webhook_url: Optional[str] = None
+class AlertConfig(BaseModel):
+    """Configuration for a single alert rule."""
+
+    name: str
+    source: str
+    metric: str
+    operator: str  # gt | lt | gte | lte | eq
+    threshold: float
+    message: str | None = None
+
+    @field_validator("operator")
+    @classmethod
+    def operator_must_be_valid(cls, v: str) -> str:
+        allowed = {"gt", "lt", "gte", "lte", "eq"}
+        if v not in allowed:
+            raise ValueError(f"operator must be one of {allowed}")
+        return v
 
 
-@dataclass
-class PipewatchConfig:
-    sources: List[SourceConfig]
-    alert: AlertConfig
+class PipewatchConfig(BaseModel):
+    """Root configuration model for pipewatch."""
+
+    sources: list[SourceConfig] = Field(default_factory=list)
+    alerts: list[AlertConfig] = Field(default_factory=list)
     log_level: str = "INFO"
-    metrics_retention_days: int = 7
+    default_interval_seconds: int = 60
 
 
-def load_config(path: str) -> PipewatchConfig:
-    """Load and parse configuration from a YAML file."""
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"Config file not found: {path}")
+def load_config(path: str | Path) -> PipewatchConfig:
+    """Load and validate a pipewatch YAML config file.
 
-    with open(path, "r") as f:
-        raw = yaml.safe_load(f)
+    Args:
+        path: Path to the YAML configuration file.
 
-    if not raw:
-        raise ValueError("Config file is empty or invalid YAML.")
+    Returns:
+        A validated PipewatchConfig instance.
 
-    sources = [
-        SourceConfig(
-            name=s["name"],
-            type=s["type"],
-            connection_string=s["connection_string"],
-            interval_seconds=s.get("interval_seconds", 60),
-            tags=s.get("tags", []),
-        )
-        for s in raw.get("sources", [])
-    ]
+    Raises:
+        FileNotFoundError: If the config file does not exist.
+        ValueError: If the file is empty or cannot be parsed.
+    """
+    config_path = Path(path)
+    if not config_path.exists():
+        raise FileNotFoundError(f"Config file not found: {config_path}")
 
-    if not sources:
-        raise ValueError("At least one source must be defined in config.")
+    raw_text = config_path.read_text(encoding="utf-8")
+    data: Any = yaml.safe_load(raw_text)
 
-    alert_raw = raw.get("alert", {})
-    alert = AlertConfig(
-        channel=alert_raw.get("channel", "log"),
-        threshold_failures=alert_raw.get("threshold_failures", 3),
-        cooldown_seconds=alert_raw.get("cooldown_seconds", 300),
-        webhook_url=alert_raw.get("webhook_url"),
-    )
+    if data is None:
+        raise ValueError(f"Config file is empty: {config_path}")
 
-    return PipewatchConfig(
-        sources=sources,
-        alert=alert,
-        log_level=raw.get("log_level", "INFO"),
-        metrics_retention_days=raw.get("metrics_retention_days", 7),
-    )
+    return PipewatchConfig.model_validate(data)
